@@ -1,0 +1,15 @@
+# Compiled C++ files
+*.exe
+*.o
+*.obj
+
+# VS Code
+.vscode/
+
+# Temporary files
+*.tmp
+*.log
+
+# Windows
+Thumbs.db
+desktop.ini

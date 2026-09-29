@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MatrixLab Login</title>
+
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body class="login-page">
+
+    <div class="login-container">
+
+        <div class="login-card">
+
+            <div class="login-logo">
+                ∑
+            </div>
+
+            <h1>MatrixLab</h1>
+
+            <p>
+                Matrix Operation System
+            </p>
+
+            <form id="loginForm">
+
+                <div class="input-group">
+
+                    <label for="username">
+                        Username
+                    </label>
+
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        placeholder="Enter username"
+                        required>
+
+                </div>
+
+
+                <div class="input-group">
+
+                    <label for="password">
+                        Password
+                    </label>
+
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        placeholder="Enter password"
+                        required>
+
+                </div>
+
+
+                <button
+                    type="submit"
+                    class="login-button">
+
+                    Login
+
+                </button>
+
+            </form>
+
+
+            <p
+                id="loginMessage"
+                class="login-message">
+            </p>
+
+
+            <div class="demo-login">
+
+                <strong>Demo Login</strong>
+
+                <br>
+
+                Username: admin
+
+                <br>
+
+                Password: admin123
+
+            </div>
+
+
+            <div class="login-footer">
+
+                MatrixLab • C++ Backend
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <script>
+
+        const loginForm = document.getElementById("loginForm");
+
+        const loginMessage =
+            document.getElementById("loginMessage");
+
+
+        loginForm.addEventListener("submit", async function(event) {
+
+            event.preventDefault();
+
+
+            const username =
+                document.getElementById("username").value;
+
+            const password =
+                document.getElementById("password").value;
+
+
+            loginMessage.textContent = "Logging in...";
+            loginMessage.style.color = "#2563eb";
+
+
+            try {
+
+                const response = await fetch("/api/login", {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/x-www-form-urlencoded"
+                    },
+
+                    credentials: "include",
+
+                    body:
+                        "username=" +
+                        encodeURIComponent(username) +
+                        "&password=" +
+                        encodeURIComponent(password)
+
+                });
+
+
+                const data = await response.json();
+
+
+                if (response.ok && data.success) {
+
+                    loginMessage.textContent =
+                        "Login successful. Opening dashboard...";
+
+                    loginMessage.style.color = "#16a34a";
+
+
+                    setTimeout(function() {
+
+                        window.location.href = "/";
+
+                    }, 500);
+
+                }
+                else {
+
+                    loginMessage.textContent =
+                        data.message || "Invalid username or password.";
+
+                    loginMessage.style.color = "#dc2626";
+
+                }
+
+            }
+            catch (error) {
+
+                console.error(error);
+
+                loginMessage.textContent =
+                    "Cannot connect to the server.";
+
+                loginMessage.style.color = "#dc2626";
+
+            }
+
+        });
+
+    </script>
+
+</body>
+</html>

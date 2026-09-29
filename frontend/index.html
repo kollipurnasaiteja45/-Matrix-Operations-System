@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>MatrixLab - Matrix Operation System</title>
+
+    <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+
+<!-- ================= NAVBAR ================= -->
+
+<nav class="navbar">
+
+    <div class="brand">
+
+        <div class="brand-icon">
+            ∑
+        </div>
+
+        <div>
+            <h2>MatrixLab</h2>
+            <span>Matrix Operation System</span>
+        </div>
+
+    </div>
+
+
+    <div class="nav-actions">
+
+        <div class="backend-status">
+
+            <span id="statusDot" class="status-dot"></span>
+
+            <span id="status">
+                Checking backend...
+            </span>
+
+        </div>
+
+        <button
+            id="themeButton"
+            class="icon-button"
+            onclick="toggleTheme()">
+
+            🌙
+
+        </button>
+
+        <button
+            class="logout-button"
+            onclick="logout()">
+
+            Logout
+
+        </button>
+
+    </div>
+
+</nav>
+
+
+<!-- ================= MAIN ================= -->
+
+<main class="container">
+
+
+    <!-- ================= HERO ================= -->
+
+    <section class="hero">
+
+        <div class="hero-text">
+
+            <div class="badge">
+                C++ POWERED
+            </div>
+
+            <h1>
+                Matrix
+                <span>Operation System</span>
+            </h1>
+
+            <p>
+                Perform powerful matrix calculations quickly
+                using our C++ powered mathematical engine.
+            </p>
+
+        </div>
+
+
+        <div class="hero-matrix">
+
+            <div class="matrix-symbol">
+                [
+            </div>
+
+            <div class="floating-number n1">
+                2
+            </div>
+
+            <div class="floating-number n2">
+                5
+            </div>
+
+            <div class="floating-number n3">
+                7
+            </div>
+
+            <div class="matrix-symbol">
+                ]
+            </div>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- ================= OPERATIONS ================= -->
+
+    <section class="section">
+
+        <div class="section-heading">
+
+            <div>
+
+                <span class="section-number">
+                    01
+                </span>
+
+                <h2>
+                    Select Operation
+                </h2>
+
+                <p>
+                    Choose the matrix operation you want to perform.
+                </p>
+
+            </div>
+
+        </div>
+
+
+        <div class="operation-grid">
+
+
+            <!-- Addition -->
+
+            <button
+                class="operation-card active"
+                data-operation="add"
+                onclick="selectOperation('add')">
+
+                <div class="operation-icon">
+                    +
+                </div>
+
+                <strong>
+                    Addition
+                </strong>
+
+                <span>
+                    A + B
+                </span>
+
+            </button>
+
+
+            <!-- Subtraction -->
+
+            <button
+                class="operation-card"
+                data-operation="subtract"
+                onclick="selectOperation('subtract')">
+
+                <div class="operation-icon">
+                    −
+                </div>
+
+                <strong>
+                    Subtraction
+                </strong>
+
+                <span>
+                    A − B
+                </span>
+
+            </button>
+
+
+            <!-- Multiplication -->
+
+            <button
+                class="operation-card"
+                data-operation="multiply"
+                onclick="selectOperation('multiply')">
+
+                <div class="operation-icon">
+                    ×
+                </div>
+
+                <strong>
+                    Multiplication
+                </strong>
+
+                <span>
+                    A × B
+                </span>
+
+            </button>
+
+
+            <!-- Transpose -->
+
+            <button
+                class="operation-card"
+                data-operation="transpose"
+                onclick="selectOperation('transpose')">
+
+                <div class="operation-icon">
+                    T
+                </div>
+
+                <strong>
+                    Transpose
+                </strong>
+
+                <span>
+                    Aᵀ
+                </span>
+
+            </button>
+
+
+            <!-- Determinant -->
+
+            <button
+                class="operation-card"
+                data-operation="determinant"
+                onclick="selectOperation('determinant')">
+
+                <div class="operation-icon">
+                    |A|
+                </div>
+
+                <strong>
+                    Determinant
+                </strong>
+
+                <span>
+                    det(A)
+                </span>
+
+            </button>
+
+
+            <!-- Inverse -->
+
+            <button
+                class="operation-card"
+                data-operation="inverse"
+                onclick="selectOperation('inverse')">
+
+                <div class="operation-icon">
+                    A⁻¹
+                </div>
+
+                <strong>
+                    Inverse
+                </strong>
+
+                <span>
+                    A⁻¹
+                </span>
+
+            </button>
+
+
+            <!-- Scalar -->
+
+            <button
+                class="operation-card"
+                data-operation="scalar"
+                onclick="selectOperation('scalar')">
+
+                <div class="operation-icon">
+                    kA
+                </div>
+
+                <strong>
+                    Scalar
+                </strong>
+
+                <span>
+                    k × A
+                </span>
+
+            </button>
+
+
+            <!-- Trace -->
+
+            <button
+                class="operation-card"
+                data-operation="trace"
+                onclick="selectOperation('trace')">
+
+                <div class="operation-icon">
+                    tr
+                </div>
+
+                <strong>
+                    Trace
+                </strong>
+
+                <span>
+                    tr(A)
+                </span>
+
+            </button>
+
+
+            <!-- Identity -->
+
+            <button
+                class="operation-card"
+                data-operation="identity"
+                onclick="selectOperation('identity')">
+
+                <div class="operation-icon">
+                    I
+                </div>
+
+                <strong>
+                    Identity
+                </strong>
+
+                <span>
+                    Iₙ
+                </span>
+
+            </button>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- ================= MATRIX INPUT ================= -->
+
+    <section class="section">
+
+        <div class="section-heading">
+
+            <div>
+
+                <span class="section-number">
+                    02
+                </span>
+
+                <h2>
+                    Matrix Input
+                </h2>
+
+                <p>
+                    Enter the dimensions and values of your matrix.
+                </p>
+
+            </div>
+
+        </div>
+
+
+        <div class="matrices-container">
+
+
+            <!-- ================= MATRIX A ================= -->
+
+            <div class="matrix-card">
+
+                <div class="matrix-card-header">
+
+                    <div>
+
+                        <span class="matrix-label">
+                            MATRIX
+                        </span>
+
+                        <h3>
+                            A
+                        </h3>
+
+                    </div>
+
+
+                    <div class="dimension">
+
+                        <label>
+                            Rows
+                        </label>
+
+                        <input
+                            type="number"
+                            id="rowsA"
+                            value="2"
+                            min="1"
+                            max="10"
+                            onchange="createGrid('A')">
+
+                    </div>
+
+
+                    <div class="dimension">
+
+                        <label>
+                            Columns
+                        </label>
+
+                        <input
+                            type="number"
+                            id="colsA"
+                            value="2"
+                            min="1"
+                            max="10"
+                            onchange="createGrid('A')">
+
+                    </div>
+
+                </div>
+
+
+                <div
+                    id="gridA"
+                    class="matrix-grid">
+                </div>
+
+            </div>
+
+
+
+            <!-- ================= OPERATOR ================= -->
+
+            <div
+                id="operatorSymbol"
+                class="operator">
+
+                +
+
+            </div>
+
+
+
+            <!-- ================= MATRIX B ================= -->
+
+            <div
+                id="matrixBCard"
+                class="matrix-card">
+
+                <div class="matrix-card-header">
+
+                    <div>
+
+                        <span class="matrix-label">
+                            MATRIX
+                        </span>
+
+                        <h3>
+                            B
+                        </h3>
+
+                    </div>
+
+
+                    <div class="dimension">
+
+                        <label>
+                            Rows
+                        </label>
+
+                        <input
+                            type="number"
+                            id="rowsB"
+                            value="2"
+                            min="1"
+                            max="10"
+                            onchange="createGrid('B')">
+
+                    </div>
+
+
+                    <div class="dimension">
+
+                        <label>
+                            Columns
+                        </label>
+
+                        <input
+                            type="number"
+                            id="colsB"
+                            value="2"
+                            min="1"
+                            max="10"
+                            onchange="createGrid('B')">
+
+                    </div>
+
+                </div>
+
+
+                <div
+                    id="gridB"
+                    class="matrix-grid">
+                </div>
+
+            </div>
+
+        </div>
+
+
+
+        <!-- ================= SCALAR ================= -->
+
+        <div
+            id="scalarBox"
+            class="scalar-panel hidden">
+
+            <label for="scalar">
+                Scalar Value
+            </label>
+
+            <input
+                type="number"
+                id="scalar"
+                value="2"
+                step="any">
+
+        </div>
+
+
+
+        <!-- ================= BUTTONS ================= -->
+
+        <div class="action-buttons">
+
+            <button
+                class="reset-button"
+                onclick="resetMatrices()">
+
+                Reset
+
+            </button>
+
+
+            <button
+                class="calculate-button"
+                onclick="calculate()">
+
+                Calculate
+
+            </button>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- ================= RESULT ================= -->
+
+    <section class="section">
+
+        <div class="section-heading">
+
+            <div>
+
+                <span class="section-number">
+                    03
+                </span>
+
+                <h2>
+                    Result
+                </h2>
+
+                <p>
+                    Your calculated matrix will appear below.
+                </p>
+
+            </div>
+
+        </div>
+
+
+        <div class="result-card">
+
+            <div class="result-top">
+
+                <div>
+
+                    <span class="result-label">
+                        OUTPUT
+                    </span>
+
+                    <h3>
+                        Calculation Result
+                    </h3>
+
+                </div>
+
+
+                <button
+                    class="copy-button"
+                    onclick="copyResult()">
+
+                    Copy
+
+                </button>
+
+            </div>
+
+
+            <pre id="result">No result yet.</pre>
+
+
+            <p
+                id="error"
+                class="error">
+            </p>
+
+        </div>
+
+    </section>
+
+
+
+    <!-- ================= HISTORY ================= -->
+
+    <section class="section history-section">
+
+        <div class="section-heading">
+
+            <div>
+
+                <span class="section-number">
+                    04
+                </span>
+
+                <h2>
+                    Calculation History
+                </h2>
+
+                <p>
+                    Your recent calculations are displayed here.
+                </p>
+
+            </div>
+
+        </div>
+
+
+        <div
+            id="history"
+            class="history-list">
+
+            <div class="empty-history">
+                No calculations yet.
+            </div>
+
+        </div>
+
+    </section>
+
+
+</main>
+
+
+
+<!-- ================= FOOTER ================= -->
+
+<footer>
+
+    <div class="footer-brand">
+
+        <div class="brand-icon">
+            ∑
+        </div>
+
+        <span>
+            MatrixLab
+        </span>
+
+    </div>
+
+    <p>
+        Matrix Operation System • C++ Backend
+    </p>
+
+</footer>
+
+
+
+<!-- ================= JAVASCRIPT ================= -->
+
+<script src="/script.js"></script>
+
+</body>
+</html>
