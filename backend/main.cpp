@@ -6,33 +6,68 @@
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
-
-#pragma comment(lib, "ws2_32.lib")
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    using Socket = SOCKET;
+    using SocketLength = int;
+    const Socket INVALID_SOCKET_VALUE = INVALID_SOCKET;
+#else
+    #include <sys/types.h>
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    using Socket = int;
+    using SocketLength = socklen_t;
+    const Socket INVALID_SOCKET_VALUE = -1;
+#endif
 
 using namespace std;
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
-
 const string USERNAME = "admin";
 const string PASSWORD = "admin123";
-
 const string SESSION_TOKEN = "MATRIXLAB_LOGIN_2026";
-
-const int PORT = 8080;
-
-// ============================================================
-// MATRIX TYPE
-// ============================================================
 
 using Matrix = vector<vector<double>>;
 
 // ============================================================
-// FILE READING
+// PLATFORM HELPERS
+// ============================================================
+
+bool startNetworking()
+{
+#ifdef _WIN32
+    WSADATA wsaData{};
+    return WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
+#else
+    return true;
+#endif
+}
+
+void stopNetworking()
+{
+#ifdef _WIN32
+    WSACleanup();
+#endif
+}
+
+void closeSocket(Socket s)
+{
+#ifdef _WIN32
+    closesocket(s);
+#else
+    close(s);
+#endif
+}
+
+// ============================================================
+// FILE
 // ============================================================
 
 string readFile(const string& filename)
@@ -40,13 +75,10 @@ string readFile(const string& filename)
     ifstream file(filename);
 
     if (!file.is_open())
-    {
         return "";
-    }
 
     stringstream buffer;
     buffer << file.rdbuf();
-
     return buffer.str();
 }
 
@@ -60,19 +92,14 @@ string urlDecode(const string& value)
 
     for (size_t i = 0; i < value.length(); i++)
     {
-        if (value[i] == '%')
+        if (value[i] == '%' && i + 2 < value.length())
         {
-            if (i + 2 < value.length())
-            {
-                string hex = value.substr(i + 1, 2);
-
-                char ch = static_cast<char>(
-                    strtol(hex.c_str(), nullptr, 16)
-                );
-
-                result += ch;
-                i += 2;
-            }
+            string hex = value.substr(i + 1, 2);
+            char ch = static_cast<char>(
+                strtol(hex.c_str(), nullptr, 16)
+            );
+            result += ch;
+            i += 2;
         }
         else if (value[i] == '+')
         {
@@ -94,22 +121,17 @@ string urlDecode(const string& value)
 string getFormValue(const string& body, const string& key)
 {
     string searchKey = key + "=";
-
     size_t start = body.find(searchKey);
 
     if (start == string::npos)
-    {
         return "";
-    }
 
     start += searchKey.length();
 
     size_t end = body.find('&', start);
 
     if (end == string::npos)
-    {
         end = body.length();
-    }
 
     return urlDecode(body.substr(start, end - start));
 }
@@ -120,9 +142,9 @@ string getFormValue(const string& body, const string& key)
 
 bool isLoggedIn(const string& request)
 {
-    string search = "matrix_session=" + SESSION_TOKEN;
-
-    return request.find(search) != string::npos;
+    return request.find(
+        "matrix_session=" + SESSION_TOKEN
+    ) != string::npos;
 }
 
 // ============================================================
@@ -130,42 +152,48 @@ bool isLoggedIn(const string& request)
 // ============================================================
 
 void sendResponse(
-    SOCKET client,
+    Socket client,
     const string& status,
     const string& contentType,
     const string& body,
     const string& extraHeaders = ""
 )
 {
-    string response;
-
-    response =
+    string response =
         "HTTP/1.1 " + status + "\r\n"
         "Content-Type: " + contentType + "\r\n"
         "Content-Length: " + to_string(body.size()) + "\r\n"
-        "Access-Control-Allow-Origin: http://localhost:8080\r\n"
-        "Access-Control-Allow-Credentials: true\r\n"
-        "Access-Control-Allow-Headers: Content-Type\r\n"
-        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
         "Connection: close\r\n"
         + extraHeaders +
         "\r\n" +
         body;
 
-    send(
-        client,
-        response.c_str(),
-        static_cast<int>(response.size()),
-        0
-    );
+    size_t sentTotal = 0;
+
+    while (sentTotal < response.size())
+    {
+        size_t remaining = response.size() - sentTotal;
+        int chunkSize = static_cast<int>(
+            min(remaining,
+                static_cast<size_t>(numeric_limits<int>::max()))
+        );
+
+        int sent = ::send(
+            client,
+            response.data() + sentTotal,
+            chunkSize,
+            0
+        );
+
+        if (sent <= 0)
+            break;
+
+        sentTotal += static_cast<size_t>(sent);
+    }
 }
 
-// ============================================================
-// JSON RESPONSE
-// ============================================================
-
 void sendJson(
-    SOCKET client,
+    Socket client,
     const string& status,
     const string& json
 )
@@ -173,19 +201,16 @@ void sendJson(
     sendResponse(
         client,
         status,
-        "application/json",
+        "application/json; charset=utf-8",
         json
     );
 }
 
 // ============================================================
-// MATRIX ADDITION
+// MATRIX OPERATIONS
 // ============================================================
 
-Matrix addMatrix(
-    const Matrix& A,
-    const Matrix& B
-)
+Matrix addMatrix(const Matrix& A, const Matrix& B)
 {
     int rows = static_cast<int>(A.size());
     int cols = static_cast<int>(A[0].size());
@@ -193,24 +218,13 @@ Matrix addMatrix(
     Matrix result(rows, vector<double>(cols));
 
     for (int i = 0; i < rows; i++)
-    {
         for (int j = 0; j < cols; j++)
-        {
             result[i][j] = A[i][j] + B[i][j];
-        }
-    }
 
     return result;
 }
 
-// ============================================================
-// MATRIX SUBTRACTION
-// ============================================================
-
-Matrix subtractMatrix(
-    const Matrix& A,
-    const Matrix& B
-)
+Matrix subtractMatrix(const Matrix& A, const Matrix& B)
 {
     int rows = static_cast<int>(A.size());
     int cols = static_cast<int>(A[0].size());
@@ -218,103 +232,58 @@ Matrix subtractMatrix(
     Matrix result(rows, vector<double>(cols));
 
     for (int i = 0; i < rows; i++)
-    {
         for (int j = 0; j < cols; j++)
-        {
             result[i][j] = A[i][j] - B[i][j];
-        }
-    }
 
     return result;
 }
 
-// ============================================================
-// MATRIX MULTIPLICATION
-// ============================================================
-
-Matrix multiplyMatrix(
-    const Matrix& A,
-    const Matrix& B
-)
+Matrix multiplyMatrix(const Matrix& A, const Matrix& B)
 {
     int rowsA = static_cast<int>(A.size());
     int colsA = static_cast<int>(A[0].size());
-
     int rowsB = static_cast<int>(B.size());
     int colsB = static_cast<int>(B[0].size());
 
     if (colsA != rowsB)
-    {
         throw runtime_error(
-            "For multiplication, columns of Matrix A "
-            "must equal rows of Matrix B."
+            "For multiplication, columns of Matrix A must equal rows of Matrix B."
         );
-    }
 
-    Matrix result(
-        rowsA,
-        vector<double>(colsB, 0)
-    );
+    Matrix result(rowsA, vector<double>(colsB, 0));
 
     for (int i = 0; i < rowsA; i++)
-    {
         for (int j = 0; j < colsB; j++)
-        {
             for (int k = 0; k < colsA; k++)
-            {
                 result[i][j] += A[i][k] * B[k][j];
-            }
-        }
-    }
 
     return result;
 }
-
-// ============================================================
-// TRANSPOSE
-// ============================================================
 
 Matrix transposeMatrix(const Matrix& A)
 {
     int rows = static_cast<int>(A.size());
     int cols = static_cast<int>(A[0].size());
 
-    Matrix result(
-        cols,
-        vector<double>(rows)
-    );
+    Matrix result(cols, vector<double>(rows));
 
     for (int i = 0; i < rows; i++)
-    {
         for (int j = 0; j < cols; j++)
-        {
             result[j][i] = A[i][j];
-        }
-    }
 
     return result;
 }
-
-// ============================================================
-// DETERMINANT
-// ============================================================
 
 double determinant(const Matrix& A)
 {
     int n = static_cast<int>(A.size());
 
     if (n == 1)
-    {
         return A[0][0];
-    }
 
     if (n == 2)
-    {
-        return
-            A[0][0] * A[1][1]
-            -
-            A[0][1] * A[1][0];
-    }
+        return A[0][0] * A[1][1] -
+               A[0][1] * A[1][0];
 
     double det = 0;
 
@@ -327,30 +296,19 @@ double determinant(const Matrix& A)
             vector<double> row;
 
             for (int j = 0; j < n; j++)
-            {
                 if (j != col)
-                {
                     row.push_back(A[i][j]);
-                }
-            }
 
             subMatrix.push_back(row);
         }
 
-        double sign = (col % 2 == 0) ? 1 : -1;
+        double sign = (col % 2 == 0) ? 1.0 : -1.0;
 
-        det +=
-            sign *
-            A[0][col] *
-            determinant(subMatrix);
+        det += sign * A[0][col] * determinant(subMatrix);
     }
 
     return det;
 }
-
-// ============================================================
-// MATRIX INVERSE
-// ============================================================
 
 Matrix inverseMatrix(const Matrix& A)
 {
@@ -359,34 +317,21 @@ Matrix inverseMatrix(const Matrix& A)
     double det = determinant(A);
 
     if (fabs(det) < 1e-10)
-    {
         throw runtime_error(
-            "Matrix inverse does not exist because "
-            "the determinant is zero."
+            "Matrix inverse does not exist because the determinant is zero."
         );
-    }
 
-    Matrix augmented(
-        n,
-        vector<double>(2 * n)
-    );
+    Matrix augmented(n, vector<double>(2 * n));
 
-    // Create [A | I]
     for (int i = 0; i < n; i++)
     {
         for (int j = 0; j < n; j++)
-        {
             augmented[i][j] = A[i][j];
-        }
 
         for (int j = 0; j < n; j++)
-        {
-            augmented[i][j + n] =
-                (i == j) ? 1 : 0;
-        }
+            augmented[i][j + n] = (i == j) ? 1.0 : 0.0;
     }
 
-    // Gauss-Jordan elimination
     for (int i = 0; i < n; i++)
     {
         double pivot = augmented[i][i];
@@ -405,93 +350,51 @@ Matrix inverseMatrix(const Matrix& A)
             }
 
             if (swapRow == -1)
-            {
                 throw runtime_error(
                     "Matrix inverse does not exist."
                 );
-            }
 
-            swap(
-                augmented[i],
-                augmented[swapRow]
-            );
-
+            swap(augmented[i], augmented[swapRow]);
             pivot = augmented[i][i];
         }
 
-        // Divide pivot row
         for (int j = 0; j < 2 * n; j++)
-        {
             augmented[i][j] /= pivot;
-        }
 
-        // Eliminate other rows
         for (int k = 0; k < n; k++)
         {
             if (k == i)
-            {
                 continue;
-            }
 
             double factor = augmented[k][i];
 
             for (int j = 0; j < 2 * n; j++)
-            {
-                augmented[k][j] -=
-                    factor * augmented[i][j];
-            }
+                augmented[k][j] -= factor * augmented[i][j];
         }
     }
 
-    Matrix result(
-        n,
-        vector<double>(n)
-    );
+    Matrix result(n, vector<double>(n));
 
     for (int i = 0; i < n; i++)
-    {
         for (int j = 0; j < n; j++)
-        {
-            result[i][j] =
-                augmented[i][j + n];
-        }
-    }
+            result[i][j] = augmented[i][j + n];
 
     return result;
 }
 
-// ============================================================
-// SCALAR MULTIPLICATION
-// ============================================================
-
-Matrix scalarMultiply(
-    const Matrix& A,
-    double scalar
-)
+Matrix scalarMultiply(const Matrix& A, double scalar)
 {
     int rows = static_cast<int>(A.size());
     int cols = static_cast<int>(A[0].size());
 
-    Matrix result(
-        rows,
-        vector<double>(cols)
-    );
+    Matrix result(rows, vector<double>(cols));
 
     for (int i = 0; i < rows; i++)
-    {
         for (int j = 0; j < cols; j++)
-        {
-            result[i][j] =
-                A[i][j] * scalar;
-        }
-    }
+            result[i][j] = A[i][j] * scalar;
 
     return result;
 }
-
-// ============================================================
-// TRACE
-// ============================================================
 
 double traceMatrix(const Matrix& A)
 {
@@ -499,57 +402,39 @@ double traceMatrix(const Matrix& A)
     int cols = static_cast<int>(A[0].size());
 
     if (rows != cols)
-    {
         throw runtime_error(
             "Trace is defined only for a square matrix."
         );
-    }
 
     double result = 0;
 
     for (int i = 0; i < rows; i++)
-    {
         result += A[i][i];
-    }
 
     return result;
 }
-
-// ============================================================
-// IDENTITY MATRIX
-// ============================================================
 
 Matrix identityMatrix(int n)
 {
-    Matrix result(
-        n,
-        vector<double>(n, 0)
-    );
+    Matrix result(n, vector<double>(n, 0));
 
     for (int i = 0; i < n; i++)
-    {
         result[i][i] = 1;
-    }
 
     return result;
 }
 
 // ============================================================
-// EXTRACT NUMBERS FROM JSON
+// JSON HELPERS
 // ============================================================
 
-vector<double> extractNumbers(
-    const string& text
-)
+vector<double> extractNumbers(const string& text)
 {
     vector<double> numbers;
-
     string current;
 
-    for (size_t i = 0; i < text.length(); i++)
+    for (char c : text)
     {
-        char c = text[i];
-
         bool valid =
             (c >= '0' && c <= '9') ||
             c == '-' ||
@@ -562,22 +447,17 @@ vector<double> extractNumbers(
         {
             current += c;
         }
-        else
+        else if (!current.empty())
         {
-            if (!current.empty())
+            try
             {
-                try
-                {
-                    numbers.push_back(
-                        stod(current)
-                    );
-                }
-                catch (...)
-                {
-                }
-
-                current.clear();
+                numbers.push_back(stod(current));
             }
+            catch (...)
+            {
+            }
+
+            current.clear();
         }
     }
 
@@ -585,9 +465,7 @@ vector<double> extractNumbers(
     {
         try
         {
-            numbers.push_back(
-                stod(current)
-            );
+            numbers.push_back(stod(current));
         }
         catch (...)
         {
@@ -597,51 +475,39 @@ vector<double> extractNumbers(
     return numbers;
 }
 
-// ============================================================
-// GET JSON VALUE
-// ============================================================
-
 string getJsonValue(
     const string& json,
     const string& key
 )
 {
-    string search =
-        "\"" + key + "\"";
+    string search = "\"" + key + "\"";
 
-    size_t pos =
-        json.find(search);
+    size_t pos = json.find(search);
 
     if (pos == string::npos)
-    {
         return "";
-    }
 
-    pos =
-        json.find(':', pos);
+    pos = json.find(':', pos);
 
     if (pos == string::npos)
-    {
         return "";
-    }
 
     pos++;
 
     while (
         pos < json.length() &&
-        (json[pos] == ' ' ||
-         json[pos] == '\t' ||
-         json[pos] == '\r' ||
-         json[pos] == '\n')
+        (
+            json[pos] == ' ' ||
+            json[pos] == '\t' ||
+            json[pos] == '\r' ||
+            json[pos] == '\n'
+        )
     )
     {
         pos++;
     }
 
-    if (
-        pos < json.length() &&
-        json[pos] == '"'
-    )
+    if (pos < json.length() && json[pos] == '"')
     {
         pos++;
 
@@ -651,7 +517,7 @@ string getJsonValue(
         {
             if (
                 json[end] == '"' &&
-                json[end - 1] != '\\'
+                (end == 0 || json[end - 1] != '\\')
             )
             {
                 break;
@@ -660,32 +526,16 @@ string getJsonValue(
             end++;
         }
 
-        return json.substr(
-            pos,
-            end - pos
-        );
+        return json.substr(pos, end - pos);
     }
 
-    size_t end =
-        json.find_first_of(
-            ",}",
-            pos
-        );
+    size_t end = json.find_first_of(",}", pos);
 
     if (end == string::npos)
-    {
         end = json.length();
-    }
 
-    return json.substr(
-        pos,
-        end - pos
-    );
+    return json.substr(pos, end - pos);
 }
-
-// ============================================================
-// GET JSON NUMBER
-// ============================================================
 
 double getJsonNumber(
     const string& json,
@@ -693,13 +543,10 @@ double getJsonNumber(
     double defaultValue = 0
 )
 {
-    string value =
-        getJsonValue(json, key);
+    string value = getJsonValue(json, key);
 
     if (value.empty())
-    {
         return defaultValue;
-    }
 
     try
     {
@@ -711,10 +558,6 @@ double getJsonNumber(
     }
 }
 
-// ============================================================
-// PARSE MATRIX FROM JSON
-// ============================================================
-
 Matrix parseMatrix(
     const string& json,
     const string& key,
@@ -722,28 +565,21 @@ Matrix parseMatrix(
     int cols
 )
 {
-    string search =
-        "\"" + key + "\"";
+    string search = "\"" + key + "\"";
 
-    size_t keyPos =
-        json.find(search);
+    size_t keyPos = json.find(search);
 
     if (keyPos == string::npos)
-    {
         throw runtime_error(
             "Matrix " + key + " not found."
         );
-    }
 
-    size_t start =
-        json.find('[', keyPos);
+    size_t start = json.find('[', keyPos);
 
     if (start == string::npos)
-    {
         throw runtime_error(
             "Invalid matrix format."
         );
-    }
 
     int depth = 0;
     size_t end = start;
@@ -751,9 +587,7 @@ Matrix parseMatrix(
     for (size_t i = start; i < json.length(); i++)
     {
         if (json[i] == '[')
-        {
             depth++;
-        }
         else if (json[i] == ']')
         {
             depth--;
@@ -767,24 +601,19 @@ Matrix parseMatrix(
     }
 
     if (depth != 0)
-    {
         throw runtime_error(
             "Invalid matrix brackets."
         );
-    }
 
     string matrixText =
-        json.substr(
-            start,
-            end - start + 1
-        );
+        json.substr(start, end - start + 1);
 
     vector<double> numbers =
         extractNumbers(matrixText);
 
     if (
-        static_cast<int>(numbers.size())
-        != rows * cols
+        static_cast<int>(numbers.size()) !=
+        rows * cols
     )
     {
         throw runtime_error(
@@ -792,45 +621,28 @@ Matrix parseMatrix(
         );
     }
 
-    Matrix matrix(
-        rows,
-        vector<double>(cols)
-    );
+    Matrix matrix(rows, vector<double>(cols));
 
     int index = 0;
 
     for (int i = 0; i < rows; i++)
-    {
         for (int j = 0; j < cols; j++)
-        {
-            matrix[i][j] =
-                numbers[index++];
-        }
-    }
+            matrix[i][j] = numbers[index++];
 
     return matrix;
 }
 
-// ============================================================
-// FORMAT NUMBER
-// ============================================================
-
 string formatNumber(double value)
 {
     if (fabs(value) < 1e-10)
-    {
         value = 0;
-    }
 
     ostringstream out;
-
-    out.fixed;
+    out.setf(ios::fixed);
     out.precision(4);
-
     out << value;
 
-    string result =
-        out.str();
+    string result = out.str();
 
     while (
         result.size() > 1 &&
@@ -851,90 +663,49 @@ string formatNumber(double value)
     return result;
 }
 
-// ============================================================
-// MATRIX TO TEXT
-// ============================================================
-
-string matrixToText(
-    const Matrix& matrix
-)
+string matrixToText(const Matrix& matrix)
 {
     string result;
 
-    for (size_t i = 0;
-         i < matrix.size();
-         i++)
+    for (size_t i = 0; i < matrix.size(); i++)
     {
         result += "[ ";
 
-        for (size_t j = 0;
-             j < matrix[i].size();
-             j++)
+        for (size_t j = 0; j < matrix[i].size(); j++)
         {
-            result +=
-                formatNumber(
-                    matrix[i][j]
-                );
+            result += formatNumber(matrix[i][j]);
 
-            if (
-                j + 1 <
-                matrix[i].size()
-            )
-            {
+            if (j + 1 < matrix[i].size())
                 result += "    ";
-            }
         }
 
         result += " ]";
 
-        if (
-            i + 1 <
-            matrix.size()
-        )
-        {
+        if (i + 1 < matrix.size())
             result += "\n";
-        }
     }
 
     return result;
 }
 
-// ============================================================
-// ESCAPE JSON STRING
-// ============================================================
-
-string escapeJsonString(
-    const string& value
-)
+string escapeJsonString(const string& value)
 {
     string result;
 
     for (char c : value)
     {
         if (c == '\\')
-        {
             result += "\\\\";
-        }
         else if (c == '"')
-        {
             result += "\\\"";
-        }
         else if (c == '\n')
-        {
             result += "\\n";
-        }
         else if (c == '\r')
-        {
             result += "\\r";
-        }
         else if (c == '\t')
-        {
             result += "\\t";
-        }
         else
-        {
             result += c;
-        }
     }
 
     return result;
@@ -945,117 +716,71 @@ string escapeJsonString(
 // ============================================================
 
 void handleCalculate(
-    SOCKET client,
+    Socket client,
     const string& request
 )
 {
-    // Authentication
     if (!isLoggedIn(request))
     {
         sendJson(
             client,
             "401 Unauthorized",
-            "{\"success\":false,"
-            "\"message\":\"Please login first.\"}"
+            "{\"success\":false,\"message\":\"Please login first.\"}"
         );
-
         return;
     }
 
-    // Find request body
-    size_t bodyPos =
-        request.find("\r\n\r\n");
+    size_t bodyPos = request.find("\r\n\r\n");
 
     if (bodyPos == string::npos)
     {
         sendJson(
             client,
             "400 Bad Request",
-            "{\"success\":false,"
-            "\"message\":\"Request body missing.\"}"
+            "{\"success\":false,\"message\":\"Request body missing.\"}"
         );
-
         return;
     }
 
-    string body =
-        request.substr(bodyPos + 4);
+    string body = request.substr(bodyPos + 4);
 
     try
     {
-        // ----------------------------------------------------
-        // Read operation
-        // ----------------------------------------------------
-
         string operation =
-            getJsonValue(
-                body,
-                "operation"
-            );
+            getJsonValue(body, "operation");
 
         int rowsA =
             static_cast<int>(
-                getJsonNumber(
-                    body,
-                    "rowsA",
-                    2
-                )
+                getJsonNumber(body, "rowsA", 2)
             );
 
         int colsA =
             static_cast<int>(
-                getJsonNumber(
-                    body,
-                    "colsA",
-                    2
-                )
+                getJsonNumber(body, "colsA", 2)
             );
 
         int rowsB =
             static_cast<int>(
-                getJsonNumber(
-                    body,
-                    "rowsB",
-                    2
-                )
+                getJsonNumber(body, "rowsB", 2)
             );
 
         int colsB =
             static_cast<int>(
-                getJsonNumber(
-                    body,
-                    "colsB",
-                    2
-                )
+                getJsonNumber(body, "colsB", 2)
             );
 
         double scalar =
-            getJsonNumber(
-                body,
-                "scalar",
-                1
-            );
-
-        // ----------------------------------------------------
-        // Validate dimensions
-        // ----------------------------------------------------
+            getJsonNumber(body, "scalar", 1);
 
         if (
-            rowsA <= 0 ||
-            colsA <= 0 ||
-            rowsA > 20 ||
-            colsA > 20
+            rowsA <= 0 || colsA <= 0 ||
+            rowsA > 20 || colsA > 20
         )
         {
             throw runtime_error(
-                "Matrix A dimensions must be "
-                "between 1 and 20."
+                "Matrix A dimensions must be between 1 and 20."
             );
         }
-
-        // ----------------------------------------------------
-        // Parse Matrix A
-        // ----------------------------------------------------
 
         Matrix A =
             parseMatrix(
@@ -1067,22 +792,12 @@ void handleCalculate(
 
         Matrix result;
 
-        // ====================================================
-        // ADDITION
-        // ====================================================
-
         if (operation == "addition")
         {
-            if (
-                rowsA != rowsB ||
-                colsA != colsB
-            )
-            {
+            if (rowsA != rowsB || colsA != colsB)
                 throw runtime_error(
-                    "For addition, both matrices "
-                    "must have the same dimensions."
+                    "For addition, both matrices must have the same dimensions."
                 );
-            }
 
             Matrix B =
                 parseMatrix(
@@ -1092,26 +807,14 @@ void handleCalculate(
                     colsB
                 );
 
-            result =
-                addMatrix(A, B);
+            result = addMatrix(A, B);
         }
-
-        // ====================================================
-        // SUBTRACTION
-        // ====================================================
-
         else if (operation == "subtraction")
         {
-            if (
-                rowsA != rowsB ||
-                colsA != colsB
-            )
-            {
+            if (rowsA != rowsB || colsA != colsB)
                 throw runtime_error(
-                    "For subtraction, both matrices "
-                    "must have the same dimensions."
+                    "For subtraction, both matrices must have the same dimensions."
                 );
-            }
 
             Matrix B =
                 parseMatrix(
@@ -1121,14 +824,8 @@ void handleCalculate(
                     colsB
                 );
 
-            result =
-                subtractMatrix(A, B);
+            result = subtractMatrix(A, B);
         }
-
-        // ====================================================
-        // MULTIPLICATION
-        // ====================================================
-
         else if (operation == "multiplication")
         {
             Matrix B =
@@ -1139,130 +836,67 @@ void handleCalculate(
                     colsB
                 );
 
-            result =
-                multiplyMatrix(A, B);
+            result = multiplyMatrix(A, B);
         }
-
-        // ====================================================
-        // TRANSPOSE
-        // ====================================================
-
         else if (operation == "transpose")
         {
-            result =
-                transposeMatrix(A);
+            result = transposeMatrix(A);
         }
-
-        // ====================================================
-        // INVERSE
-        // ====================================================
-
         else if (operation == "inverse")
         {
             if (rowsA != colsA)
-            {
                 throw runtime_error(
                     "Inverse requires a square matrix."
                 );
-            }
 
-            result =
-                inverseMatrix(A);
+            result = inverseMatrix(A);
         }
-
-        // ====================================================
-        // SCALAR MULTIPLICATION
-        // ====================================================
-
         else if (operation == "scalar")
         {
-            result =
-                scalarMultiply(
-                    A,
-                    scalar
-                );
+            result = scalarMultiply(A, scalar);
         }
-
-        // ====================================================
-        // IDENTITY MATRIX
-        // ====================================================
-
         else if (operation == "identity")
         {
             if (rowsA != colsA)
-            {
                 throw runtime_error(
-                    "Identity matrix requires "
-                    "a square size."
+                    "Identity matrix requires a square size."
                 );
-            }
 
-            result =
-                identityMatrix(rowsA);
+            result = identityMatrix(rowsA);
         }
-
-        // ====================================================
-        // DETERMINANT
-        // ====================================================
-
         else if (operation == "determinant")
         {
             if (rowsA != colsA)
-            {
                 throw runtime_error(
-                    "Determinant requires "
-                    "a square matrix."
+                    "Determinant requires a square matrix."
                 );
-            }
 
-            double det =
-                determinant(A);
-
-            string response =
-                "{\"success\":true,"
-                "\"type\":\"number\","
-                "\"result\":\"" +
-                formatNumber(det) +
-                "\"}";
+            double det = determinant(A);
 
             sendJson(
                 client,
                 "200 OK",
-                response
+                "{\"success\":true,\"type\":\"number\",\"result\":\"" +
+                formatNumber(det) +
+                "\"}"
             );
 
             return;
         }
-
-        // ====================================================
-        // TRACE
-        // ====================================================
-
         else if (operation == "trace")
         {
-            double trace =
-                traceMatrix(A);
-
-            string response =
-                "{\"success\":true,"
-                "\"type\":\"number\","
-                "\"result\":\"" +
-                formatNumber(trace) +
-                "\"}";
+            double trace = traceMatrix(A);
 
             sendJson(
                 client,
                 "200 OK",
-                response
+                "{\"success\":true,\"type\":\"number\",\"result\":\"" +
+                formatNumber(trace) +
+                "\"}"
             );
 
             return;
         }
-
-        // ====================================================
-        // INVALID OPERATION
-        // ====================================================
-
         else
         {
             throw runtime_error(
@@ -1270,21 +904,11 @@ void handleCalculate(
             );
         }
 
-        // ====================================================
-        // MATRIX RESPONSE
-        // ====================================================
-
         string resultText =
             matrixToText(result);
 
-        // IMPORTANT:
-        // Escape ONLY the matrix string.
-        // Do NOT escape the complete JSON object.
-
         string escapedResult =
-            escapeJsonString(
-                resultText
-            );
+            escapeJsonString(resultText);
 
         string response =
             "{\"success\":true,"
@@ -1302,209 +926,155 @@ void handleCalculate(
     catch (const exception& e)
     {
         string message =
-            escapeJsonString(
-                e.what()
-            );
-
-        string response =
-            "{\"success\":false,"
-            "\"message\":\"" +
-            message +
-            "\"}";
+            escapeJsonString(e.what());
 
         sendJson(
             client,
             "400 Bad Request",
-            response
+            "{\"success\":false,\"message\":\"" +
+            message +
+            "\"}"
         );
     }
 }
 
 // ============================================================
-// MAIN SERVER
+// PORT
+// ============================================================
+
+int getPort()
+{
+    const char* portEnv = getenv("PORT");
+
+    if (portEnv != nullptr)
+    {
+        try
+        {
+            int port = stoi(portEnv);
+
+            if (port > 0 && port <= 65535)
+                return port;
+        }
+        catch (...)
+        {
+        }
+    }
+
+    return 8080;
+}
+
+// ============================================================
+// MAIN
 // ============================================================
 
 int main()
 {
-    WSADATA wsaData;
-
-    if (
-        WSAStartup(
-            MAKEWORD(2, 2),
-            &wsaData
-        ) != 0
-    )
+    if (!startNetworking())
     {
-        cerr
-            << "WSAStartup failed."
-            << endl;
-
+        cerr << "Network initialization failed." << endl;
         return 1;
     }
 
-    SOCKET serverSocket =
+    int port = getPort();
+
+    Socket serverSocket =
         socket(
             AF_INET,
             SOCK_STREAM,
             0
         );
 
-    if (
-        serverSocket ==
-        INVALID_SOCKET
-    )
+    if (serverSocket == INVALID_SOCKET_VALUE)
     {
-        cerr
-            << "Socket creation failed."
-            << endl;
-
-        WSACleanup();
-
+        cerr << "Socket creation failed." << endl;
+        stopNetworking();
         return 1;
     }
 
-    // Allow address reuse
     int opt = 1;
 
+#ifdef _WIN32
     setsockopt(
         serverSocket,
         SOL_SOCKET,
         SO_REUSEADDR,
-        reinterpret_cast<char*>(&opt),
+        reinterpret_cast<const char*>(&opt),
         sizeof(opt)
     );
+#else
+    setsockopt(
+        serverSocket,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &opt,
+        sizeof(opt)
+    );
+#endif
 
     sockaddr_in serverAddress{};
 
-    serverAddress.sin_family =
-        AF_INET;
-
-    serverAddress.sin_addr.s_addr =
-        inet_addr("127.0.0.1");
-
-    serverAddress.sin_port =
-        htons(PORT);
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_addr.s_addr = htonl(INADDR_ANY);
+    serverAddress.sin_port = htons(
+        static_cast<unsigned short>(port)
+    );
 
     if (
         bind(
             serverSocket,
-            reinterpret_cast<sockaddr*>(
-                &serverAddress
-            ),
+            reinterpret_cast<sockaddr*>(&serverAddress),
             sizeof(serverAddress)
-        ) == SOCKET_ERROR
+        ) < 0
     )
     {
-        cerr
-            << "Bind failed."
-            << endl;
-
-        closesocket(serverSocket);
-        WSACleanup();
-
+        cerr << "Bind failed on port " << port << "." << endl;
+        closeSocket(serverSocket);
+        stopNetworking();
         return 1;
     }
 
-    if (
-        listen(
-            serverSocket,
-            10
-        ) == SOCKET_ERROR
-    )
+    if (listen(serverSocket, 20) < 0)
     {
-        cerr
-            << "Listen failed."
-            << endl;
-
-        closesocket(serverSocket);
-        WSACleanup();
-
+        cerr << "Listen failed." << endl;
+        closeSocket(serverSocket);
+        stopNetworking();
         return 1;
     }
 
-    cout
-        << "====================================="
-        << endl;
-
-    cout
-        << "      MATRIXLAB C++ SERVER"
-        << endl;
-
-    cout
-        << "====================================="
-        << endl;
-
-    cout
-        << "Server running at:"
-        << endl;
-
-    cout
-        << "http://localhost:8080"
-        << endl;
-
-    cout
-        << endl;
-
-    cout
-        << "Username: admin"
-        << endl;
-
-    cout
-        << "Password: admin123"
-        << endl;
-
-    cout
-        << endl;
-
-    cout
-        << "Waiting for connections..."
-        << endl;
-
-    cout
-        << "====================================="
-        << endl;
-
-    // ========================================================
-    // SERVER LOOP
-    // ========================================================
+    cout << "=====================================" << endl;
+    cout << "       MATRIXLAB C++ SERVER" << endl;
+    cout << "=====================================" << endl;
+    cout << "Host: 0.0.0.0" << endl;
+    cout << "Port: " << port << endl;
+    cout << "Login: admin / admin123" << endl;
+    cout << "Server started successfully." << endl;
+    cout << "=====================================" << endl;
 
     while (true)
     {
         sockaddr_in clientAddress{};
 
-        int clientSize =
-            sizeof(clientAddress);
+        SocketLength clientSize =
+            static_cast<SocketLength>(
+                sizeof(clientAddress)
+            );
 
-        SOCKET clientSocket =
+        Socket clientSocket =
             accept(
                 serverSocket,
-                reinterpret_cast<sockaddr*>(
-                    &clientAddress
-                ),
+                reinterpret_cast<sockaddr*>(&clientAddress),
                 &clientSize
             );
 
-        if (
-            clientSocket ==
-            INVALID_SOCKET
-        )
-        {
+        if (clientSocket == INVALID_SOCKET_VALUE)
             continue;
-        }
-
-        // ----------------------------------------------------
-        // Receive HTTP request
-        // ----------------------------------------------------
 
         string request;
-
         char buffer[65536];
 
-        int bytesReceived;
-
-        do
+        while (true)
         {
-            bytesReceived =
+            int received =
                 recv(
                     clientSocket,
                     buffer,
@@ -1512,37 +1082,98 @@ int main()
                     0
                 );
 
-            if (bytesReceived > 0)
-            {
-                request.append(
-                    buffer,
-                    bytesReceived
-                );
-            }
+            if (received <= 0)
+                break;
 
-        } while (
-            bytesReceived ==
-            sizeof(buffer)
-        );
+            request.append(buffer, received);
+
+            size_t headerEnd =
+                request.find("\r\n\r\n");
+
+            if (headerEnd == string::npos)
+                continue;
+
+            size_t contentLengthPos =
+                request.find("Content-Length:");
+
+            if (contentLengthPos != string::npos)
+            {
+                size_t valueStart =
+                    contentLengthPos + 15;
+
+                while (
+                    valueStart < request.size() &&
+                    request[valueStart] == ' '
+                )
+                {
+                    valueStart++;
+                }
+
+                size_t valueEnd =
+                    request.find("\r\n", valueStart);
+
+                if (valueEnd != string::npos)
+                {
+                    try
+                    {
+                        size_t contentLength =
+                            stoul(
+                                request.substr(
+                                    valueStart,
+                                    valueEnd - valueStart
+                                )
+                            );
+
+                        size_t bodyStart =
+                            headerEnd + 4;
+
+                        if (
+                            request.size() >=
+                            bodyStart + contentLength
+                        )
+                        {
+                            break;
+                        }
+                    }
+                    catch (...)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                break;
+            }
+        }
 
         if (request.empty())
         {
-            closesocket(clientSocket);
+            closeSocket(clientSocket);
             continue;
         }
-
-        // ----------------------------------------------------
-        // Request Line
-        // ----------------------------------------------------
 
         size_t firstSpace =
             request.find(' ');
 
         size_t secondSpace =
-            request.find(
-                ' ',
-                firstSpace + 1
+            request.find(' ', firstSpace + 1);
+
+        if (
+            firstSpace == string::npos ||
+            secondSpace == string::npos
+        )
+        {
+            sendResponse(
+                clientSocket,
+                "400 Bad Request",
+                "text/plain",
+                "Bad Request"
             );
+
+            closeSocket(clientSocket);
+            continue;
+        }
 
         string method =
             request.substr(
@@ -1553,20 +1184,14 @@ int main()
         string path =
             request.substr(
                 firstSpace + 1,
-                secondSpace -
-                firstSpace -
-                1
+                secondSpace - firstSpace - 1
             );
 
-        cout
-            << method
-            << " "
-            << path
-            << endl;
+        cout << method << " " << path << endl;
 
-        // ====================================================
+        // ----------------------------------------------------
         // OPTIONS
-        // ====================================================
+        // ----------------------------------------------------
 
         if (method == "OPTIONS")
         {
@@ -1578,9 +1203,9 @@ int main()
             );
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // LOGIN
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "POST" &&
@@ -1592,44 +1217,17 @@ int main()
 
             string body;
 
-            if (
-                bodyPos !=
-                string::npos
-            )
-            {
-                body =
-                    request.substr(
-                        bodyPos + 4
-                    );
-            }
+            if (bodyPos != string::npos)
+                body = request.substr(bodyPos + 4);
 
             string username =
-                getFormValue(
-                    body,
-                    "username"
-                );
+                getFormValue(body, "username");
 
             string password =
-                getFormValue(
-                    body,
-                    "password"
-                );
+                getFormValue(body, "password");
 
-            cout
-                << "Login attempt:"
-                << endl;
-
-            cout
-                << "Username = ["
-                << username
-                << "]"
-                << endl;
-
-            cout
-                << "Password = ["
-                << password
-                << "]"
-                << endl;
+            cout << "Login attempt: "
+                 << username << endl;
 
             if (
                 username == USERNAME &&
@@ -1637,10 +1235,9 @@ int main()
             )
             {
                 string headers =
-                    "Set-Cookie: "
-                    "matrix_session=" +
+                    "Set-Cookie: matrix_session=" +
                     SESSION_TOKEN +
-                    "; Path=/; HttpOnly\r\n";
+                    "; Path=/; HttpOnly; SameSite=Lax\r\n";
 
                 sendResponse(
                     clientSocket,
@@ -1662,9 +1259,9 @@ int main()
             }
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // LOGOUT
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
@@ -1672,11 +1269,9 @@ int main()
         )
         {
             string headers =
-                "Set-Cookie: "
-                "matrix_session=; "
-                "Path=/; "
-                "Max-Age=0; "
-                "HttpOnly\r\n";
+                "Set-Cookie: matrix_session=;"
+                " Path=/; Max-Age=0;"
+                " HttpOnly; SameSite=Lax\r\n";
 
             sendResponse(
                 clientSocket,
@@ -1687,9 +1282,9 @@ int main()
             );
         }
 
-        // ====================================================
-        // HEALTH CHECK
-        // ====================================================
+        // ----------------------------------------------------
+        // HEALTH
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
@@ -1704,9 +1299,9 @@ int main()
             );
         }
 
-        // ====================================================
-        // MATRIX CALCULATION
-        // ====================================================
+        // ----------------------------------------------------
+        // CALCULATE
+        // ----------------------------------------------------
 
         else if (
             method == "POST" &&
@@ -1719,72 +1314,46 @@ int main()
             );
         }
 
-        // ====================================================
-        // HOME PAGE
-        // ====================================================
+        // ----------------------------------------------------
+        // HOME
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
             path == "/"
         )
         {
-            if (isLoggedIn(request))
-            {
-                string html =
-                    readFile(
-                        "frontend/index.html"
-                    );
+            string filename =
+                isLoggedIn(request)
+                    ? "frontend/index.html"
+                    : "frontend/login.html";
 
-                if (html.empty())
-                {
-                    sendResponse(
-                        clientSocket,
-                        "500 Internal Server Error",
-                        "text/plain",
-                        "index.html not found."
-                    );
-                }
-                else
-                {
-                    sendResponse(
-                        clientSocket,
-                        "200 OK",
-                        "text/html",
-                        html
-                    );
-                }
+            string html =
+                readFile(filename);
+
+            if (html.empty())
+            {
+                sendResponse(
+                    clientSocket,
+                    "500 Internal Server Error",
+                    "text/plain",
+                    "HTML file not found."
+                );
             }
             else
             {
-                string html =
-                    readFile(
-                        "frontend/login.html"
-                    );
-
-                if (html.empty())
-                {
-                    sendResponse(
-                        clientSocket,
-                        "500 Internal Server Error",
-                        "text/plain",
-                        "login.html not found."
-                    );
-                }
-                else
-                {
-                    sendResponse(
-                        clientSocket,
-                        "200 OK",
-                        "text/html",
-                        html
-                    );
-                }
+                sendResponse(
+                    clientSocket,
+                    "200 OK",
+                    "text/html; charset=utf-8",
+                    html
+                );
             }
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // LOGIN PAGE
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
@@ -1792,60 +1361,44 @@ int main()
         )
         {
             string html =
-                readFile(
-                    "frontend/login.html"
-                );
+                readFile("frontend/login.html");
 
             sendResponse(
                 clientSocket,
                 "200 OK",
-                "text/html",
+                "text/html; charset=utf-8",
                 html
             );
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // INDEX PAGE
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
             path == "/index.html"
         )
         {
-            if (!isLoggedIn(request))
-            {
-                string html =
-                    readFile(
-                        "frontend/login.html"
-                    );
+            string filename =
+                isLoggedIn(request)
+                    ? "frontend/index.html"
+                    : "frontend/login.html";
 
-                sendResponse(
-                    clientSocket,
-                    "200 OK",
-                    "text/html",
-                    html
-                );
-            }
-            else
-            {
-                string html =
-                    readFile(
-                        "frontend/index.html"
-                    );
+            string html =
+                readFile(filename);
 
-                sendResponse(
-                    clientSocket,
-                    "200 OK",
-                    "text/html",
-                    html
-                );
-            }
+            sendResponse(
+                clientSocket,
+                "200 OK",
+                "text/html; charset=utf-8",
+                html
+            );
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // CSS
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
@@ -1853,9 +1406,7 @@ int main()
         )
         {
             string css =
-                readFile(
-                    "frontend/style.css"
-                );
+                readFile("frontend/style.css");
 
             sendResponse(
                 clientSocket,
@@ -1865,9 +1416,9 @@ int main()
             );
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // JAVASCRIPT
-        // ====================================================
+        // ----------------------------------------------------
 
         else if (
             method == "GET" &&
@@ -1875,9 +1426,7 @@ int main()
         )
         {
             string js =
-                readFile(
-                    "frontend/script.js"
-                );
+                readFile("frontend/script.js");
 
             sendResponse(
                 clientSocket,
@@ -1887,9 +1436,9 @@ int main()
             );
         }
 
-        // ====================================================
+        // ----------------------------------------------------
         // 404
-        // ====================================================
+        // ----------------------------------------------------
 
         else
         {
@@ -1901,16 +1450,11 @@ int main()
             );
         }
 
-        closesocket(clientSocket);
+        closeSocket(clientSocket);
     }
 
-    // ========================================================
-    // CLEANUP
-    // ========================================================
-
-    closesocket(serverSocket);
-
-    WSACleanup();
+    closeSocket(serverSocket);
+    stopNetworking();
 
     return 0;
 }
